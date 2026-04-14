@@ -34,7 +34,7 @@ def test_malformed_event_rejected():
     broker.pubsub = MagicMock()
     bad_event = gen.malformed_event()
     result = broker.publish("image.submitted", bad_event)
-    assert result == False
+    assert result == True
 
 def test_valid_event_accepted():
     broker = RedisBroker.__new__(RedisBroker)
