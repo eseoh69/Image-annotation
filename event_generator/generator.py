@@ -53,3 +53,19 @@ class EventGenerator:
     def duplicate_event(self, event):
         """Returns an exact copy of an event to simulate duplicates."""
         return event.copy()
+    
+    def inference_completed_real(self, image_id: str, objects: list):
+        """Create inference.completed event with real detected objects."""
+        return self._make_event("inference.completed", {
+            "image_id": image_id,
+            "objects": objects,
+            "model": "yolov8n"
+        })
+    def inference_completed_real(self, image_id: str, objects: list):
+        """Create inference.completed event with real detected objects."""
+        return self._make_event("inference.completed", {
+            "image_id": image_id,
+            "objects": objects,
+            "model": "yolov8n"
+        })
+    
