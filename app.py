@@ -10,6 +10,7 @@ from services.inference_service import InferenceService
 from services.cli_service import CLIService
 import pandas as pd
 
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 # ─── Page Config ───────────────────────────────────────────────
 st.set_page_config(
     page_title="EC530 Image Annotation System",
@@ -36,6 +37,7 @@ if "annotated_image_path" not in st.session_state:
 def start_services():
     inference_broker = RedisBroker()
     annotation_broker = RedisBroker()
+    embedding_broker = RedisBroker()
     cli_broker = RedisBroker()
 
     # Start inference service
@@ -48,6 +50,12 @@ def start_services():
     annotation = AnnotationService(annotation_broker)
     annotation_thread = threading.Thread(target=annotation.start, daemon=True)
     annotation_thread.start()
+
+    # Start embedding service
+    from services.embedding_service import EmbeddingService
+    embedding = EmbeddingService(embedding_broker)
+    embedding_thread = threading.Thread(target=embedding.start, daemon=True)
+    embedding_thread.start()
 
     # Start CLI service
     cli = CLIService(cli_broker)
@@ -75,7 +83,6 @@ with left_col:
     )
 
     if uploaded_file is not None:
-        # Save uploaded file temporarily
         os.makedirs("images/uploads", exist_ok=True)
         temp_path = f"images/uploads/{uploaded_file.name}"
         with open(temp_path, "wb") as f:
@@ -110,8 +117,8 @@ with left_col:
 
             # Log remaining events
             st.session_state.pipeline_log.append("⚙️ **inference.completed** → objects detected")
-            st.session_state.pipeline_log.append("💾 **annotation.stored** → saved to document DB (Week 2)")
-            st.session_state.pipeline_log.append("🔢 **embedding.created** → vector indexed (Week 2)")
+            st.session_state.pipeline_log.append("💾 **annotation.stored** → saved to MongoDB Atlas")
+            st.session_state.pipeline_log.append("🔢 **embedding.created** → vector indexed in FAISS")
 
             # Store results
             if image_id in cli.results:
@@ -151,7 +158,6 @@ if image_id and image_id in cli.results:
 
     objects = cli.results[image_id]
 
-    # Build summary table
     counts = {}
     conf_totals = {}
     for obj in objects:
@@ -163,7 +169,6 @@ if image_id and image_id in cli.results:
     table_data = []
     for label, count in sorted(counts.items(), key=lambda x: -x[1]):
         avg_conf = round(conf_totals[label] / count, 2)
-        bar = "█" * int(avg_conf * 10)
         table_data.append({
             "Object": label,
             "Count": count,
@@ -181,12 +186,56 @@ if image_id and image_id in cli.results:
         }
     )
 
-    # Summary line
     total = sum(counts.values())
     summary = ", ".join([f"{c} {l}" for l, c in sorted(counts.items(), key=lambda x: -x[1])])
     st.success(f"**{total} objects detected:** {summary}")
 
-# ─── History ───────────────────────────────────────────────────
+# ─── Similarity Search ─────────────────────────────────────────
+st.divider()
+st.subheader("🔍 Search Similar Images")
+
+col1, col2 = st.columns([3, 1])
+with col1:
+    query_image_id = st.text_input(
+        "Enter image_id to find similar images",
+        placeholder="e.g. img_4dde7a30"
+    )
+with col2:
+    top_k = st.slider("Top K", min_value=1, max_value=5, value=3)
+
+if st.button("🔎 Search", use_container_width=False):
+    if query_image_id:
+        from db.vector_index import VectorIndex
+        from db.document_db import DocumentDB
+        index = VectorIndex(dim=128)
+        db = DocumentDB()
+
+        annotation = db.get_annotation(query_image_id)
+        if annotation:
+            from services.embedding_service import EmbeddingService
+            es = EmbeddingService.__new__(EmbeddingService)
+            vector = es._simulate_embedding(annotation.get("objects", []))
+            results = index.search(vector, k=top_k)
+
+            if results:
+                st.write(f"**Top {len(results)} similar images:**")
+                for r in results:
+                    ann = db.get_annotation(r["image_id"])
+                    if ann:
+                        labels = [o["label"] for o in ann.get("objects", [])]
+                        counts = {}
+                        for l in labels:
+                            counts[l] = counts.get(l, 0) + 1
+                        summary = ", ".join([f"{c} {l}" for l, c in sorted(counts.items(), key=lambda x: -x[1])])
+                        st.markdown(f"- `{r['image_id']}` — distance: `{r['distance']}` — {summary}")
+            else:
+                st.warning("No similar images found. Upload more images first.")
+        else:
+            st.error(f"Image ID not found: {query_image_id}")
+    else:
+        st.warning("Please enter an image_id to search.")
+
+# ─── Session History ───────────────────────────────────────────
 if st.session_state.results:
     st.divider()
     st.subheader("🕓 Session History")
